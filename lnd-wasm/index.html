@@ -1,0 +1,456 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>lnd wasm wallet</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f9;
+      color: #17202a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    main { width: min(1180px, calc(100vw - 32px)); margin: 0 auto; padding: 24px 0 40px; }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    h1 { font-size: 24px; line-height: 1.15; margin: 0; letter-spacing: 0; }
+    h2 { font-size: 15px; margin: 0 0 12px; letter-spacing: 0; }
+    label { display: grid; gap: 6px; font-size: 12px; color: #55606d; }
+    input, select, button, textarea {
+      font: inherit;
+      border: 1px solid #ccd3dc;
+      border-radius: 6px;
+      min-height: 38px;
+    }
+    input, select, textarea { width: 100%; padding: 8px 10px; background: #fff; color: #17202a; }
+    textarea { min-height: 76px; resize: vertical; }
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #1f6feb;
+      color: #fff;
+      border-color: #1f6feb;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button.secondary { background: #fff; color: #17202a; border-color: #ccd3dc; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .status { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #344054; text-align: right; }
+    .panel, .metric, .table-wrap { background: #fff; border: 1px solid #dde3ea; border-radius: 8px; padding: 14px; }
+    .setup { max-width: 720px; display: grid; gap: 14px; }
+    .dashboard { display: grid; gap: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .row { display: flex; gap: 10px; align-items: end; }
+    .row > * { flex: 1; }
+    .row > button { flex: 0 0 auto; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .metric b { display: block; font-size: 20px; line-height: 1.1; margin-top: 4px; }
+    .metric span { font-size: 12px; color: #687385; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #edf0f4; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    th { color: #687385; font-weight: 600; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .hidden { display: none !important; }
+    .result { margin-top: 10px; padding: 10px; background: #f6f8fa; border-radius: 6px; min-height: 38px; overflow: auto; }
+    .danger { color: #b42318; }
+    .ok { color: #067647; }
+    @media (max-width: 860px) {
+      main { width: min(100vw - 20px, 1180px); padding-top: 16px; }
+      header { display: grid; }
+      .status { text-align: left; }
+      .span-3, .span-4, .span-6, .span-8 { grid-column: span 12; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .row { display: grid; }
+      .row > button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>lnd wasm wallet</h1>
+      </div>
+      <pre id="status" class="status">loading</pre>
+    </header>
+
+    <section id="setup-view" class="setup panel">
+      <h2>Connection</h2>
+      <div class="grid">
+        <label class="span-4">Bitcoin network
+          <select id="network" data-testid="network">
+            <option value="regtest">regtest</option>
+            <option value="signet">signet</option>
+            <option value="testnet">testnet</option>
+            <option value="mainnet">mainnet</option>
+          </select>
+        </label>
+        <label class="span-8">Esplora API
+          <input id="esplora-url" data-testid="esplora-url" placeholder="http://127.0.0.1:3002">
+        </label>
+        <label class="span-8">Peer proxy
+          <input id="peer-proxy-url" data-testid="peer-proxy-url" value="ws://127.0.0.1:8765/peer-proxy">
+        </label>
+        <label class="span-4">Wallet password
+          <input id="wallet-password" data-testid="wallet-password" type="password" value="lnd-wasm-demo">
+        </label>
+      </div>
+      <div class="row">
+        <button id="start-wallet" data-testid="start-wallet">Start wallet</button>
+      </div>
+      <div id="setup-result" class="result mono"></div>
+    </section>
+
+    <section id="dashboard-view" class="dashboard hidden">
+      <div class="metrics">
+        <div class="metric"><span>Confirmed</span><b id="confirmed-balance">0</b></div>
+        <div class="metric"><span>Unconfirmed</span><b id="unconfirmed-balance">0</b></div>
+        <div class="metric"><span>Channel local</span><b id="channel-local-balance">0</b></div>
+        <div class="metric"><span>Peers</span><b id="peer-count">0</b></div>
+      </div>
+
+      <div class="grid">
+        <section class="panel span-6">
+          <h2>Wallet</h2>
+          <div class="row">
+            <label>Address type
+              <select id="address-type" data-testid="address-type">
+                <option value="witness">p2wkh</option>
+                <option value="taproot">p2tr</option>
+                <option value="nested">np2wkh</option>
+              </select>
+            </label>
+            <button id="new-address" data-testid="new-address">New address</button>
+          </div>
+          <div id="address-result" class="result mono"></div>
+          <div class="row" style="margin-top: 12px;">
+            <label>Recipient
+              <input id="send-address" data-testid="send-address">
+            </label>
+            <label>Amount sats
+              <input id="send-amount" data-testid="send-amount" type="number" min="1" value="1000">
+            </label>
+            <button id="send-coins" data-testid="send-coins">Send</button>
+          </div>
+          <div id="send-result" class="result mono"></div>
+        </section>
+
+        <section class="panel span-6">
+          <h2>Lightning</h2>
+          <div class="row">
+            <label>Invoice amount sats
+              <input id="invoice-amount" data-testid="invoice-amount" type="number" min="1" value="1000">
+            </label>
+            <button id="create-invoice" data-testid="create-invoice">Create invoice</button>
+          </div>
+          <div id="invoice-result" class="result mono"></div>
+          <div class="row" style="margin-top: 12px;">
+            <label>Payment request
+              <textarea id="payment-request" data-testid="payment-request"></textarea>
+            </label>
+            <label>Outgoing channel
+              <select id="payment-channel" data-testid="payment-channel"></select>
+            </label>
+            <button id="send-payment" data-testid="send-payment">Pay</button>
+          </div>
+          <div id="payment-result" class="result mono"></div>
+        </section>
+
+        <section class="panel span-6">
+          <h2>Peers</h2>
+          <div class="row">
+            <label>Pubkey
+              <input id="peer-pubkey" data-testid="peer-pubkey">
+            </label>
+            <label>Host
+              <input id="peer-host" data-testid="peer-host" placeholder="127.0.0.1:9735">
+            </label>
+            <button id="connect-peer" data-testid="connect-peer">Connect</button>
+          </div>
+          <div id="connect-result" class="result mono"></div>
+          <div class="row" style="margin-top: 12px;">
+            <button id="refresh-peers" class="secondary" data-testid="refresh-peers">List peers</button>
+          </div>
+          <div class="table-wrap" style="margin-top: 10px;">
+            <table>
+              <thead><tr><th>Pubkey</th><th>Address</th><th>Direction</th></tr></thead>
+              <tbody id="peers-table" data-testid="peers-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel span-6">
+          <h2>Channels</h2>
+          <div class="row">
+            <label>Peer pubkey
+              <input id="channel-pubkey" data-testid="channel-pubkey">
+            </label>
+            <label>Amount sats
+              <input id="channel-amount" data-testid="channel-amount" type="number" min="20000" value="100000">
+            </label>
+            <label>Push sats
+              <input id="channel-push" data-testid="channel-push" type="number" min="0" value="0">
+            </label>
+            <button id="open-channel" data-testid="open-channel">Open</button>
+          </div>
+          <div class="row" style="margin-top: 10px;">
+            <label><input id="channel-private" type="checkbox" checked> Private</label>
+            <label><input id="channel-zero-conf" type="checkbox"> Zero-conf</label>
+          </div>
+          <div id="channel-result" class="result mono"></div>
+          <div class="row" style="margin-top: 12px;">
+            <button id="refresh-channels" class="secondary" data-testid="refresh-channels">List channels</button>
+          </div>
+          <div class="table-wrap" style="margin-top: 10px;">
+            <table>
+              <thead><tr><th>Point</th><th>Remote</th><th>Local</th><th>Remote bal</th></tr></thead>
+              <tbody id="channels-table" data-testid="channels-table"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script src="sqlite-bridge.js"></script>
+  <script src="wasm_exec.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const status = $("status");
+    const setupResult = $("setup-result");
+
+    window.__lndWasmReady = false;
+    window.__lndWasmFailure = "";
+
+    function setStatus(text, kind = "") {
+      status.textContent = text;
+      status.className = `status ${kind}`;
+    }
+
+    function writeResult(id, value, kind = "") {
+      const el = $(id);
+      el.className = `result mono ${kind}`;
+      el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    }
+
+    function buttonBusy(button, busy) {
+      button.disabled = busy;
+    }
+
+    function configuredArgs() {
+      window.lndWasmBitcoinNetwork = $("network").value;
+      const esploraURL = $("esplora-url").value.trim();
+      const peerProxyURL = $("peer-proxy-url").value.trim();
+      if (esploraURL) window.lndWasmEsploraURL = esploraURL;
+      if (peerProxyURL) window.lndWasmPeerProxyURL = peerProxyURL;
+      return window.lndWasmDefaultArgs();
+    }
+
+    window.startLndWasmDemo = async (args) => {
+      try {
+        const result = await window.lndWasmStart(args || configuredArgs());
+        result.wallet = await window.lndWasmEnsureWallet($("wallet-password").value);
+        window.__lndWasmWallet = result.wallet;
+        window.__lndWasmReady = true;
+        $("setup-view").classList.add("hidden");
+        $("dashboard-view").classList.remove("hidden");
+        setStatus(`${result.wallet.walletState} @ ${result.wallet.blockHeight}`, "ok");
+        setupResult.textContent = JSON.stringify(result, null, 2);
+        await refreshAll();
+        return result;
+      } catch (error) {
+        const message = error && (error.stack || error.message) || String(error);
+        window.__lndWasmFailure = message;
+        setStatus(message, "danger");
+        setupResult.textContent = message;
+        throw error;
+      }
+    };
+
+    async function refreshBalances() {
+      const balances = await window.lndWasmBalances();
+      $("confirmed-balance").textContent = balances.confirmedBalance;
+      $("unconfirmed-balance").textContent = balances.unconfirmedBalance;
+      $("channel-local-balance").textContent = balances.channelLocalBalance;
+      return balances;
+    }
+
+    async function refreshPeers() {
+      const result = await window.lndWasmListPeers();
+      $("peer-count").textContent = result.peers.length;
+      $("peers-table").innerHTML = result.peers.map((peer) => `
+        <tr>
+          <td class="mono">${peer.pubkey}</td>
+          <td>${peer.address || ""}</td>
+          <td>${peer.inbound ? "inbound" : "outbound"}</td>
+        </tr>
+      `).join("");
+      return result;
+    }
+
+    async function refreshChannels() {
+      const result = await window.lndWasmListChannels();
+      $("channels-table").innerHTML = result.channels.map((channel) => `
+        <tr>
+          <td class="mono">${channel.channelPoint}</td>
+          <td class="mono">${channel.remotePubkey}</td>
+          <td>${channel.localBalance}</td>
+          <td>${channel.remoteBalance}</td>
+        </tr>
+      `).join("");
+      $("payment-channel").innerHTML = `<option value="">auto</option>` + result.channels.map((channel) => `
+        <option value="${channel.chanId}">${channel.localBalance} sats | ${channel.remotePubkey.slice(0, 12)}</option>
+      `).join("");
+      return result;
+    }
+
+    async function refreshAll() {
+      await Promise.allSettled([refreshBalances(), refreshPeers(), refreshChannels()]);
+    }
+
+    $("start-wallet").addEventListener("click", async () => {
+      const button = $("start-wallet");
+      buttonBusy(button, true);
+      setStatus("starting");
+      try {
+        const result = await window.startLndWasmDemo(configuredArgs());
+        writeResult("setup-result", result, "ok");
+      } catch (error) {
+        writeResult("setup-result", error.message || String(error), "danger");
+      } finally {
+        buttonBusy(button, false);
+      }
+    });
+
+    $("new-address").addEventListener("click", async () => {
+      try {
+        const result = await window.lndWasmNewAddress($("address-type").value);
+        $("send-address").value = result.address;
+        writeResult("address-result", result, "ok");
+        await refreshBalances();
+      } catch (error) {
+        writeResult("address-result", error.message || String(error), "danger");
+      }
+    });
+
+    $("send-coins").addEventListener("click", async () => {
+      try {
+        const result = await window.lndWasmSendCoins(
+          $("send-address").value.trim(),
+          Number($("send-amount").value),
+        );
+        writeResult("send-result", result, "ok");
+        await refreshBalances();
+      } catch (error) {
+        writeResult("send-result", error.message || String(error), "danger");
+      }
+    });
+
+    $("connect-peer").addEventListener("click", async () => {
+      try {
+        const result = await window.lndWasmConnectPeer(
+          $("peer-pubkey").value.trim(),
+          $("peer-host").value.trim(),
+        );
+        $("channel-pubkey").value = $("peer-pubkey").value.trim();
+        writeResult("connect-result", result, "ok");
+        await refreshPeers();
+      } catch (error) {
+        writeResult("connect-result", error.message || String(error), "danger");
+      }
+    });
+
+    $("open-channel").addEventListener("click", async () => {
+      try {
+        const result = await window.lndWasmOpenChannel(
+          $("channel-pubkey").value.trim(),
+          Number($("channel-amount").value),
+          {
+            pushSat: Number($("channel-push").value),
+            private: $("channel-private").checked,
+            zeroConf: $("channel-zero-conf").checked,
+          },
+        );
+        writeResult("channel-result", result, "ok");
+        await refreshChannels();
+      } catch (error) {
+        writeResult("channel-result", error.message || String(error), "danger");
+      }
+    });
+
+    $("create-invoice").addEventListener("click", async () => {
+      try {
+        const result = await window.lndWasmAddInvoice(Number($("invoice-amount").value));
+        $("payment-request").value = result.paymentRequest;
+        writeResult("invoice-result", result, "ok");
+      } catch (error) {
+        writeResult("invoice-result", error.message || String(error), "danger");
+      }
+    });
+
+    $("send-payment").addEventListener("click", async () => {
+      try {
+        const result = await window.lndWasmPayInvoice(
+          $("payment-request").value.trim(),
+          $("payment-channel").value,
+        );
+        writeResult("payment-result", result, "ok");
+        await refreshBalances();
+      } catch (error) {
+        writeResult("payment-result", error.message || String(error), "danger");
+      }
+    });
+
+    $("refresh-peers").addEventListener("click", refreshPeers);
+    $("refresh-channels").addEventListener("click", refreshChannels);
+    setInterval(() => {
+      if (window.__lndWasmReady) refreshAll();
+    }, 2500);
+
+    async function fetchWasmBytes() {
+      const response = await fetch("lndwasm.wasm", { cache: "no-store" });
+      if (response.ok) {
+        return response.arrayBuffer();
+      }
+
+      const gzip = await fetch("lndwasm.wasm.gz", { cache: "no-store" });
+      if (!gzip.ok) {
+        throw new Error(`unable to fetch lndwasm.wasm: ${response.status}`);
+      }
+      if (!("DecompressionStream" in window)) {
+        throw new Error("gzip wasm fallback requires DecompressionStream");
+      }
+
+      const stream = gzip.body.pipeThrough(new DecompressionStream("gzip"));
+      return new Response(stream).arrayBuffer();
+    }
+
+    (async () => {
+      try {
+        const go = new Go();
+        const bytes = await fetchWasmBytes();
+        const result = await WebAssembly.instantiate(bytes, go.importObject);
+        go.run(result.instance).catch((error) => {
+          console.error("go wasm runtime failed", error);
+          window.__lndWasmFailure = error && (error.stack || error.message) || String(error);
+        });
+        setStatus("ready");
+      } catch (error) {
+        console.error("wasm bootstrap failed", error);
+        window.__lndWasmFailure = error && (error.stack || error.message) || String(error);
+        setStatus(window.__lndWasmFailure, "danger");
+      }
+    })();
+  </script>
+</body>
+</html>
