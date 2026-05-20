@@ -222,6 +222,7 @@
     </section>
   </main>
 
+  <script src="enable-threads.js"></script>
   <script src="sqlite-bridge.js"></script>
   <script src="wasm_exec.js"></script>
   <script>
@@ -435,8 +436,32 @@
       return new Response(stream).arrayBuffer();
     }
 
+    async function ensureStorageIsolation() {
+      if (window.crossOriginIsolated) {
+        return;
+      }
+
+      if (!("serviceWorker" in navigator)) {
+        return;
+      }
+
+      setStatus("enabling opfs storage");
+      try {
+        await navigator.serviceWorker.ready;
+      } catch (error) {
+        console.warn("service worker readiness failed", error);
+        return;
+      }
+
+      if (!window.crossOriginIsolated) {
+        window.location.reload();
+        await new Promise(() => {});
+      }
+    }
+
     (async () => {
       try {
+        await ensureStorageIsolation();
         const go = new Go();
         const bytes = await fetchWasmBytes();
         const result = await WebAssembly.instantiate(bytes, go.importObject);
