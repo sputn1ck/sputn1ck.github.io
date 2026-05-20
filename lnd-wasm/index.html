@@ -90,16 +90,16 @@
         <label class="span-4">Bitcoin network
           <select id="network" data-testid="network">
             <option value="regtest">regtest</option>
-            <option value="signet">signet</option>
+            <option value="signet" selected>signet</option>
             <option value="testnet">testnet</option>
             <option value="mainnet">mainnet</option>
           </select>
         </label>
         <label class="span-8">Esplora API
-          <input id="esplora-url" data-testid="esplora-url" placeholder="http://127.0.0.1:3002">
+          <input id="esplora-url" data-testid="esplora-url" value="https://mempool.space/signet/api">
         </label>
         <label class="span-8">Peer proxy
-          <input id="peer-proxy-url" data-testid="peer-proxy-url" value="ws://127.0.0.1:8765/peer-proxy">
+          <input id="peer-proxy-url" data-testid="peer-proxy-url" value="wss://konwss.tunn.dev/lightning">
         </label>
         <label class="span-4">Wallet password
           <input id="wallet-password" data-testid="wallet-password" type="password" value="lnd-wasm-demo">
