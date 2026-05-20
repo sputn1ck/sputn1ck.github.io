@@ -62,6 +62,20 @@
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .hidden { display: none !important; }
     .result { margin-top: 10px; padding: 10px; background: #f6f8fa; border-radius: 6px; min-height: 38px; overflow: auto; }
+    .log-panel { margin-top: 16px; }
+    .log-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .log-output {
+      height: 260px;
+      overflow: auto;
+      background: #0f1720;
+      color: #d7e0ea;
+      border-radius: 6px;
+      padding: 10px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 11px;
+      line-height: 1.45;
+    }
     .danger { color: #b42318; }
     .ok { color: #067647; }
     @media (max-width: 860px) {
@@ -109,6 +123,14 @@
         <button id="start-wallet" data-testid="start-wallet">Start wallet</button>
       </div>
       <div id="setup-result" class="result mono"></div>
+    </section>
+
+    <section class="panel log-panel">
+      <div class="log-head">
+        <h2>Logs</h2>
+        <button id="clear-logs" class="secondary" data-testid="clear-logs">Clear</button>
+      </div>
+      <pre id="log-output" class="log-output mono" data-testid="log-output"></pre>
     </section>
 
     <section id="dashboard-view" class="dashboard hidden">
@@ -232,6 +254,56 @@
 
     window.__lndWasmReady = false;
     window.__lndWasmFailure = "";
+    window.__lndWasmLogs = [];
+
+    function formatLogArg(value) {
+      if (value instanceof Error) {
+        return value.stack || value.message;
+      }
+      if (typeof value === "string") {
+        return value;
+      }
+      try {
+        return JSON.stringify(value);
+      } catch (_) {
+        return String(value);
+      }
+    }
+
+    function appendLog(level, args) {
+      const line = `${new Date().toISOString()} [${level}] ${args.map(formatLogArg).join(" ")}`;
+      window.__lndWasmLogs.push(line);
+      if (window.__lndWasmLogs.length > 2000) {
+        window.__lndWasmLogs.splice(0, window.__lndWasmLogs.length - 2000);
+      }
+
+      const output = $("log-output");
+      if (!output) {
+        return;
+      }
+      output.textContent = window.__lndWasmLogs.join("\n");
+      output.scrollTop = output.scrollHeight;
+    }
+
+    const originalConsole = {
+      log: console.log.bind(console),
+      info: console.info.bind(console),
+      warn: console.warn.bind(console),
+      error: console.error.bind(console),
+      debug: console.debug.bind(console),
+    };
+    for (const level of Object.keys(originalConsole)) {
+      console[level] = (...args) => {
+        appendLog(level, args);
+        originalConsole[level](...args);
+      };
+    }
+    window.addEventListener("error", (event) => {
+      appendLog("error", [event.message, event.filename, event.lineno, event.colno]);
+    });
+    window.addEventListener("unhandledrejection", (event) => {
+      appendLog("error", ["unhandled rejection", event.reason]);
+    });
 
     function setStatus(text, kind = "") {
       status.textContent = text;
@@ -254,6 +326,11 @@
       const peerProxyURL = $("peer-proxy-url").value.trim();
       if (esploraURL) window.lndWasmEsploraURL = esploraURL;
       if (peerProxyURL) window.lndWasmPeerProxyURL = peerProxyURL;
+      console.info("configured lnd wasm", {
+        network: window.lndWasmBitcoinNetwork,
+        esploraURL,
+        peerProxyURL,
+      });
       return window.lndWasmDefaultArgs();
     }
 
@@ -359,6 +436,11 @@
 
     $("connect-peer").addEventListener("click", async () => {
       try {
+        console.info("connect peer requested", {
+          pubkey: $("peer-pubkey").value.trim(),
+          host: $("peer-host").value.trim(),
+          proxy: window.lndWasmPeerProxyURL || $("peer-proxy-url").value.trim(),
+        });
         const result = await window.lndWasmConnectPeer(
           $("peer-pubkey").value.trim(),
           $("peer-host").value.trim(),
@@ -414,6 +496,10 @@
 
     $("refresh-peers").addEventListener("click", refreshPeers);
     $("refresh-channels").addEventListener("click", refreshChannels);
+    $("clear-logs").addEventListener("click", () => {
+      window.__lndWasmLogs = [];
+      $("log-output").textContent = "";
+    });
     setInterval(() => {
       if (window.__lndWasmReady) refreshAll();
     }, 2500);
