@@ -62,6 +62,9 @@
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .hidden { display: none !important; }
     .result { margin-top: 10px; padding: 10px; background: #f6f8fa; border-radius: 6px; min-height: 38px; overflow: auto; }
+    .notice { border-radius: 6px; padding: 10px; font-size: 12px; line-height: 1.35; }
+    .notice.warning { background: #fff4e5; border: 1px solid #ffd39b; color: #8a4b05; }
+    .storage-status { margin-top: 10px; }
     .log-panel { margin-top: 16px; }
     .log-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
     .log-output {
@@ -115,13 +118,25 @@
         <label class="span-8">Peer proxy
           <input id="peer-proxy-url" data-testid="peer-proxy-url" value="wss://konwss.tunn.dev/lightning">
         </label>
+        <label class="span-4">Storage
+          <select id="storage-vfs" data-testid="storage-vfs">
+            <option value="opfs-sahpool" selected>opfs-sahpool</option>
+            <option value="opfs-wl">opfs-wl</option>
+            <option value="opfs">opfs</option>
+            <option value="memory">memory</option>
+          </select>
+        </label>
         <label class="span-4">Wallet password
           <input id="wallet-password" data-testid="wallet-password" type="password" value="lnd-wasm-demo">
         </label>
       </div>
+      <div id="storage-warning" class="notice warning hidden" data-testid="storage-warning">
+        Memory storage is active. Wallet, channel, and payment state will be lost when this tab or worker is reset.
+      </div>
       <div class="row">
         <button id="start-wallet" data-testid="start-wallet">Start wallet</button>
       </div>
+      <div id="storage-status" class="result mono storage-status" data-testid="storage-status"></div>
       <div id="setup-result" class="result mono"></div>
     </section>
 
@@ -320,16 +335,39 @@
       button.disabled = busy;
     }
 
+    function storageInfo() {
+      const vfs = $("storage-vfs").value || "opfs-sahpool";
+      return {
+        requestedVFS: vfs,
+        persistent: vfs !== "memory",
+        memory: vfs === "memory",
+      };
+    }
+
+    function renderStorageInfo(info = storageInfo()) {
+      const warning = $("storage-warning");
+      warning.classList.toggle("hidden", !info.memory);
+      writeResult("storage-status", {
+        requestedVFS: info.requestedVFS,
+        persistent: info.persistent,
+        memory: info.memory,
+      }, info.memory ? "danger" : "ok");
+    }
+
     function configuredArgs() {
       window.lndWasmBitcoinNetwork = $("network").value;
+      window.lndWasmSQLiteVFS = $("storage-vfs").value || "opfs-sahpool";
       const esploraURL = $("esplora-url").value.trim();
       const peerProxyURL = $("peer-proxy-url").value.trim();
       if (esploraURL) window.lndWasmEsploraURL = esploraURL;
       if (peerProxyURL) window.lndWasmPeerProxyURL = peerProxyURL;
+      const storage = storageInfo();
+      renderStorageInfo(storage);
       console.info("configured lnd wasm", {
         network: window.lndWasmBitcoinNetwork,
         esploraURL,
         peerProxyURL,
+        storage,
       });
       return window.lndWasmDefaultArgs();
     }
@@ -338,6 +376,7 @@
       try {
         const result = await window.lndWasmStart(args || configuredArgs());
         result.wallet = await window.lndWasmEnsureWallet($("wallet-password").value);
+        result.storage = storageInfo();
         window.__lndWasmWallet = result.wallet;
         window.__lndWasmReady = true;
         $("setup-view").classList.add("hidden");
@@ -496,10 +535,12 @@
 
     $("refresh-peers").addEventListener("click", refreshPeers);
     $("refresh-channels").addEventListener("click", refreshChannels);
+    $("storage-vfs").addEventListener("change", () => renderStorageInfo());
     $("clear-logs").addEventListener("click", () => {
       window.__lndWasmLogs = [];
       $("log-output").textContent = "";
     });
+    renderStorageInfo();
     setInterval(() => {
       if (window.__lndWasmReady) refreshAll();
     }, 2500);

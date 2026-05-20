@@ -83,7 +83,7 @@
         ok: true,
         dbId: result.dbId,
         filename: result.filename,
-        vfsType: result.vfs === "memory" ? "memory" : (result.persistent ? "opfs" : result.vfs),
+        vfsType: result.vfs,
         resolvedVFS: result.vfs,
         persistent: !!result.persistent
       };

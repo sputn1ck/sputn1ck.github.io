@@ -56,6 +56,20 @@ function normalizeFilename(file) {
   return file;
 }
 
+function normalizeRequestedVFS(vfs) {
+  switch ((vfs || "auto").toLowerCase()) {
+    case "":
+    case "auto":
+    case "opfs-auto":
+      return "auto";
+    case "opfs-sah":
+    case "sahpool":
+      return "opfs-sahpool";
+    default:
+      return vfs;
+  }
+}
+
 function normalizeOPFSFilename(file) {
   if (file.startsWith("/") || file.startsWith("file:")) return file;
   return `/${file}`;
@@ -249,93 +263,107 @@ async function init(args = {}) {
   return { version: sqlite3.version, vfsList: vfsList(), workerProtocolVersion };
 }
 
+async function openPersistentDB(vfsName, filename, uriParams, args) {
+  if (vfsName === "opfs-sahpool" && sqlite3.installOpfsSAHPoolVfs && !hasVFS("opfs-sahpool")) {
+    await sqlite3.installOpfsSAHPoolVfs({ name: "opfs-sahpool" });
+  }
+  if (!hasVFS(vfsName)) {
+    throw new Error(`requested SQLite VFS is unavailable: ${vfsName}`);
+  }
+
+  let resolvedFilename = normalizeOPFSFilename(filename);
+  const resolved = makeURI(resolvedFilename, uriParams);
+  const duplicateKey = `opfs:${resolved}`;
+  if (openOPFSFiles.has(duplicateKey)) {
+    throw new Error(`OPFS database already open in this worker: ${resolved}`);
+  }
+
+  let db;
+  if (vfsName === "opfs" && sqlite3.oo1.OpfsDb) {
+    db = new sqlite3.oo1.OpfsDb(resolved, openFlags(args.mode));
+  } else {
+    db = new sqlite3.oo1.DB({ filename: resolved, flags: openFlags(args.mode), vfs: vfsName });
+  }
+
+  resolvedFilename = db.dbFilename();
+  const vfs = db.dbVfsName() || vfsName;
+  openOPFSFiles.set(duplicateKey, true);
+  db.__opfsKey = duplicateKey;
+
+  return { db, filename: resolvedFilename, vfs, persistent: true };
+}
+
+function openMemoryDB(args) {
+  if (args.requirePersistent) {
+    throw new Error("persistent storage required but memory VFS was requested");
+  }
+  return {
+    db: new sqlite3.oo1.DB(":memory:", openFlags(args.mode)),
+    filename: ":memory:",
+    vfs: "memory",
+    persistent: false
+  };
+}
+
 async function open(args) {
   await ensureSQLite();
 
-  const requestedVFS = args.vfs || "opfs";
+  const requestedVFS = normalizeRequestedVFS(args.vfs);
   let filename = normalizeFilename(args.file || args.filename || "/app.db");
-  let vfs = requestedVFS;
-  let persistent = false;
-  let db;
+  let opened;
 
   const uriParams = {};
   if (args.cache) uriParams.cache = args.cache;
 
   if (filename === ":memory:" || requestedVFS === "memory") {
-    if (args.requirePersistent) {
-      throw new Error("persistent storage required but memory VFS was requested");
-    }
-    filename = ":memory:";
-    vfs = "memory";
-    db = new sqlite3.oo1.DB(filename, openFlags(args.mode));
-  } else if (requestedVFS === "opfs") {
-    if (sqlite3.oo1.OpfsDb && hasVFS("opfs")) {
-      filename = normalizeOPFSFilename(filename);
-      const resolved = makeURI(filename, uriParams);
-      const duplicateKey = `opfs:${resolved}`;
-      if (openOPFSFiles.has(duplicateKey)) {
-        throw new Error(`OPFS database already open in this worker: ${resolved}`);
-      }
-      db = new sqlite3.oo1.OpfsDb(resolved, openFlags(args.mode));
-      filename = db.dbFilename();
-      vfs = db.dbVfsName() || "opfs";
-      persistent = true;
-      openOPFSFiles.set(duplicateKey, true);
-      db.__opfsKey = duplicateKey;
-    } else {
-      if (args.requirePersistent) {
-        throw new Error("persistent OPFS storage required but OPFS VFS is unavailable");
-      }
-      sqlite3.config.warn("OPFS VFS unavailable, falling back to :memory:");
-      filename = ":memory:";
-      vfs = "memory";
-      db = new sqlite3.oo1.DB(filename, openFlags(args.mode));
-    }
+    opened = openMemoryDB(args);
   } else {
-    if (requestedVFS === "opfs-sahpool" && sqlite3.installOpfsSAHPoolVfs && !hasVFS("opfs-sahpool")) {
-      await sqlite3.installOpfsSAHPoolVfs({ name: "opfs-sahpool" });
+    const candidates = requestedVFS === "auto"
+      ? ["opfs-wl", "opfs-sahpool", "opfs"]
+      : [requestedVFS];
+    const failures = [];
+    for (const candidate of candidates) {
+      try {
+        opened = await openPersistentDB(candidate, filename, uriParams, args);
+        break;
+      } catch (error) {
+        failures.push(`${candidate}: ${error.message || String(error)}`);
+        if (/already open/i.test(error.message || "")) {
+          throw error;
+        }
+        if (requestedVFS !== "auto") {
+          if (requestedVFS === "opfs" && !args.requirePersistent) {
+            sqlite3.config.warn("OPFS VFS unavailable, falling back to :memory:", error.message || String(error));
+            opened = openMemoryDB(args);
+            break;
+          }
+          throw error;
+        }
+      }
     }
-    if (!hasVFS(requestedVFS)) {
-      throw new Error(`requested SQLite VFS is unavailable: ${requestedVFS}`);
+    if (!opened) {
+      if (args.requirePersistent) {
+        throw new Error(`persistent storage required but no OPFS VFS opened; tried ${failures.join("; ")}`);
+      }
+      sqlite3.config.warn("OPFS VFS unavailable, falling back to :memory:", failures.join("; "));
+      opened = openMemoryDB(args);
     }
-    if (requestedVFS === "opfs-sahpool") {
-      filename = normalizeOPFSFilename(filename);
-    }
-    const resolved = makeURI(filename, { ...uriParams, vfs: requestedVFS });
-    const duplicateKey = requestedVFS.startsWith("opfs") ? `${requestedVFS}:${resolved}` : "";
-    if (duplicateKey && openOPFSFiles.has(duplicateKey)) {
-      throw new Error(`OPFS database already open in this worker: ${resolved}`);
-    }
-    db = new sqlite3.oo1.DB({ filename: resolved, flags: openFlags(args.mode), vfs: requestedVFS });
-    filename = db.dbFilename();
-    vfs = db.dbVfsName() || requestedVFS;
-    persistent = requestedVFS.startsWith("opfs");
-    if (duplicateKey) {
-      openOPFSFiles.set(duplicateKey, true);
-      db.__opfsKey = duplicateKey;
-    }
-  }
-
-  if (args.requirePersistent && !persistent) {
-    if (db.__opfsKey) openOPFSFiles.delete(db.__opfsKey);
-    db.close();
-    throw new Error(`persistent storage required but resolved VFS is ${vfs}`);
   }
 
   if (args.busyTimeout > 0) {
-    sqlite3.capi.sqlite3_busy_timeout(db.pointer, args.busyTimeout);
+    sqlite3.capi.sqlite3_busy_timeout(opened.db.pointer, args.busyTimeout);
   }
   if (args.journalMode) {
-    db.exec(`PRAGMA journal_mode=${args.journalMode}`);
+    opened.db.exec(`PRAGMA journal_mode=${args.journalMode}`);
   }
   for (const pragma of args.pragma || []) {
-    if (pragma) db.exec(`PRAGMA ${pragma}`);
+    if (pragma) opened.db.exec(`PRAGMA ${pragma}`);
   }
 
   const dbId = `db${nextDbId++}`;
-  dbs.set(dbId, db);
+  dbs.set(dbId, opened.db);
 
-  return { dbId, filename, vfs, persistent };
+  return { dbId, filename: opened.filename, vfs: opened.vfs, persistent: opened.persistent };
 }
 
 async function exec(args) {
